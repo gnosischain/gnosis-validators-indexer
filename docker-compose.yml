@@ -1,0 +1,52 @@
+version: "3.9"
+
+# One service per chain. Update VALIDATORS_API_URL in consolidate-ui to point here.
+#
+# consolidate-ui .env:
+#   VALIDATORS_API_URL=http://validators-indexer-gnosis:3001
+#   VALIDATORS_API_KEY=your-api-key
+
+services:
+  validators-indexer-gnosis:
+    build: .
+    image: gnosis-validators-indexer:latest
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      CHAIN_ID: 100
+      API_KEY: ${API_KEY}
+      BEACON_URL_100: ${BEACON_URL_GNOSIS:-https://rpc-gbc.gnosischain.com}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      FULL_SYNC_EVERY_N_EPOCHS: ${FULL_SYNC_EVERY_N_EPOCHS:-4}
+    ports:
+      - "3001:3001"
+    # Memory limit: full validator set (~650k) peaks at ~500MB during sync
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Allow up to 10 minutes for the initial full sync before marking unhealthy
+      start_period: 600s
+
+  validators-indexer-chiado:
+    build: .
+    image: gnosis-validators-indexer:latest
+    restart: unless-stopped
+    environment:
+      PORT: 3002
+      CHAIN_ID: 10200
+      API_KEY: ${API_KEY}
+      BEACON_URL_10200: ${BEACON_URL_CHIADO:-https://rpc-gbc.chiadochain.net}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      FULL_SYNC_EVERY_N_EPOCHS: ${FULL_SYNC_EVERY_N_EPOCHS:-4}
+    ports:
+      - "3002:3002"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
