@@ -2,10 +2,10 @@
   "name": "gnosis-validators-indexer",
   "version": "1.0.0",
   "description": "Real-time beacon chain validator indexer keyed by withdrawal credentials",
-  "main": "build/src/index.js",
+  "main": "build/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node build/src/index.js",
+    "start": "node build/index.js",
     "dev": "ts-node src/index.ts",
     "dev:pretty": "ts-node src/index.ts | pino-pretty"
   },

@@ -13,4 +13,4 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --frozen-lockfile 2>/dev/null || npm install --omit=dev
 COPY --from=builder /app/build ./build
 EXPOSE 3001
-CMD ["node", "build/src/index.js"]
+CMD ["node", "build/index.js"]

@@ -8,9 +8,12 @@ export function registerHealthRoutes(
 ): void {
   // Always 200 — process is alive
   app.get('/health', async (_request, reply) => {
+    const snapshot = indexer.healthSnapshot();
     return reply.send({
       chainId: CHAIN_CONFIG.chainId,
-      ...indexer.healthSnapshot(),
+      status: snapshot.status,
+      lastUpdatedAt: snapshot.lastUpdatedAt,
+      validatorCount: snapshot.validatorCount,
     });
   });
 
