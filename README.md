@@ -1,6 +1,6 @@
 # gnosis-validators-indexer
 
-A lightweight service that indexes all beacon chain validators in memory, keyed by withdrawal address, for fast lookups. Built for use with [consolidate-ui](https://github.com/gnosischain/consolidate-ui).
+A lightweight service that indexes all beacon chain validators in memory, keyed by withdrawal address, for fast lookups.
 
 ## How it works
 

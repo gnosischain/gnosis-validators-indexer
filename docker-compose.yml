@@ -1,11 +1,5 @@
 version: "3.9"
 
-# One service per chain. Update VALIDATORS_API_URL in consolidate-ui to point here.
-#
-# consolidate-ui .env:
-#   VALIDATORS_API_URL=http://validators-indexer-gnosis:3001
-#   VALIDATORS_API_KEY=your-api-key
-
 services:
   validators-indexer-gnosis:
     build: .
@@ -20,8 +14,7 @@ services:
       FULL_SYNC_EVERY_N_EPOCHS: ${FULL_SYNC_EVERY_N_EPOCHS:-4}
     ports:
       - "3001:3001"
-    # Memory limit: full validator set (~650k) peaks at ~500MB during sync
-    mem_limit: 1g
+    mem_limit: 512m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/ready"]
       interval: 30s

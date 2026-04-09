@@ -5,12 +5,12 @@ export class BeaconClient {
   constructor(private readonly baseUrl: string) {}
 
   /**
-   * Fetch all validators from beacon state.
-   * Only extracts validator_index, pubkey, and withdrawal_address —
-   * Validators with BLS (0x00) credentials are excluded as they have no EVM address.
+   * Fetch active and pending validators from beacon state.
+   * Exited/withdrawal validators are excluded — only active and pending are indexed.
+   * Validators with BLS (0x00) credentials are also excluded as they have no EVM address.
    */
   async fetchAllValidators(stateId = 'head'): Promise<ValidatorRecord[]> {
-    const url = `${this.baseUrl}/eth/v1/beacon/states/${stateId}/validators`;
+    const url = `${this.baseUrl}/eth/v1/beacon/states/${stateId}/validators?status=active&status=pending`;
     logger.info({ url }, 'Fetching all validators');
 
     const res = await fetch(url, { headers: { Accept: 'application/json', 'Accept-Encoding': 'gzip' } });
