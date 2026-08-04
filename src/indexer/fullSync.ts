@@ -11,16 +11,16 @@ export async function runFullSync(
 
   indexer.status = 'loading';
 
-  const validators = await client.fetchAllValidators('head');
+  const { records, exitQueueEpoch } = await client.fetchAllValidators('head');
 
   indexer.beginPending();
-  for (const record of validators) {
+  for (const record of records) {
     indexer.addPending(record);
   }
-  indexer.commitPending();
+  indexer.commitPending(exitQueueEpoch);
 
   logger.info(
-    { validatorCount: validators.length, durationMs: Date.now() - start },
+    { validatorCount: records.length, exitQueueEpoch, durationMs: Date.now() - start },
     'Full validator sync complete',
   );
 }
