@@ -1,4 +1,4 @@
-import { ValidatorRecord, IndexerStatus } from '../types';
+import { IndexerStatus, QueueSnapshot, QueuedDepositRecord, ValidatorRecord } from '../types';
 import { logger } from '../utils/logger';
 
 export class IndexerManager {
@@ -11,8 +11,14 @@ export class IndexerManager {
   private pendingByIndex: Map<number, ValidatorRecord> | null = null;
   private pendingByAddress: Map<string, Set<number>> | null = null;
 
+  // Queued deposits: lowercase withdrawal_address → deposits awaiting processing.
+  // Refreshed by the queue sync, which runs far more often than the full sync.
+  private queuedByAddress = new Map<string, QueuedDepositRecord[]>();
+  private snapshot: QueueSnapshot | null = null;
+
   public status: IndexerStatus = 'booting';
   public lastUpdatedAt: Date | null = null;
+  public queueUpdatedAt: Date | null = null;
   public validatorCount = 0;
 
   // ─── Query ────────────────────────────────────────────────────────────────
@@ -37,6 +43,22 @@ export class IndexerManager {
     }
 
     return result;
+  }
+
+  /** Deposits queued for an address that have not been processed yet. */
+  queryQueuedDeposits(
+    withdrawal_address: string,
+    limit: number,
+    offset: number,
+  ): QueuedDepositRecord[] {
+    const deposits = this.queuedByAddress.get(withdrawal_address.toLowerCase());
+    if (!deposits || deposits.length === 0) return [];
+    return deposits.slice(offset, offset + limit);
+  }
+
+  /** The last committed queue snapshot, or null before the first sync lands. */
+  queueSnapshot(): QueueSnapshot | null {
+    return this.snapshot;
   }
 
   // ─── Full sync (atomic swap) ───────────────────────────────────────────────
@@ -85,6 +107,26 @@ export class IndexerManager {
     logger.info({ validatorCount: this.validatorCount }, 'Full sync committed');
   }
 
+  // ─── Queue sync (atomic swap) ──────────────────────────────────────────────
+
+  /** Replace the queue index and snapshot in one tick. */
+  commitQueue(
+    snapshot: QueueSnapshot,
+    queuedByAddress: Map<string, QueuedDepositRecord[]>,
+  ): void {
+    this.snapshot = snapshot;
+    this.queuedByAddress = queuedByAddress;
+    this.queueUpdatedAt = new Date();
+
+    logger.debug(
+      {
+        depositQueueCount: snapshot.deposit_queue_count,
+        addressesWithQueuedDeposits: queuedByAddress.size,
+      },
+      'Queue sync committed',
+    );
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   healthSnapshot() {
@@ -92,6 +134,8 @@ export class IndexerManager {
       status: this.status,
       lastUpdatedAt: this.lastUpdatedAt,
       validatorCount: this.validatorCount,
+      queueUpdatedAt: this.queueUpdatedAt,
+      depositQueueCount: this.snapshot?.deposit_queue_count ?? null,
     };
   }
 }

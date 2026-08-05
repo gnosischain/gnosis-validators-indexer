@@ -54,16 +54,37 @@ deposits still waiting in the queue:
       "withdrawal_credentials": "0x0200...2cd4...",
       "amount_gwei": "1600000000000",
       "gwei_ahead": "0",
-      "count_ahead": 0
+      "count_ahead": 0,
+      "slot": "29374608"
     }
   ]
 }
 ```
 
-`gwei_ahead` and `count_ahead` are how much is queued in front of that deposit —
-divide `gwei_ahead` by `churn_per_epoch_gwei` from `/queue` for the epochs it
-waits. `queued_deposits` includes top-ups to validators that already exist, so
-drop any pubkey that also appears in `validators`.
+`gwei_ahead` and `count_ahead` are how much is queued in front of that deposit,
+and `slot` is where it entered the queue. Three limits apply at once and the
+tightest one sets the wait, so take the largest of the three, using constants
+from `/queue`:
+
+```
+epochs ≈ max(
+  gwei_ahead  / churn_per_epoch_gwei,           // balance drained per epoch
+  count_ahead / max_pending_deposits_per_epoch, // entries read per epoch
+  floor(slot / slots_per_epoch) - finalized_epoch, // finality frontier
+)
+```
+
+Balance is usually the binding limit, but a run of small top-ups hits the count
+limit first — 16 entries per epoch drains far slower than the churn allows.
+The chain stops processing at the last
+finalized slot, so a deposit included after `finalized_slot` cannot be processed
+yet no matter how empty the queue is. Multiply by `seconds_per_epoch` for a
+duration.
+
+`queued_deposits` includes top-ups to validators that already exist, so drop any
+pubkey that also appears in `validators`. When a pubkey has several entries the
+record carries the last one's position — it is only fully credited once that
+entry clears.
 
 **GET `/queue`** — chain-wide queue state, served from memory. Returns 503 until
 the first queue sync lands. Amounts are raw consensus-layer gwei (mGNO gwei on
@@ -74,23 +95,31 @@ Gnosis):
   "chain_id": 100,
   "current_epoch": 1835913,
   "seconds_per_epoch": 80,
+  "slots_per_epoch": 16,
   "churn_per_epoch_gwei": "64000000000",
   "max_pending_deposits_per_epoch": 16,
   "withdrawability_delay_epochs": 256,
   "max_seed_lookahead": 4,
   "finalized_epoch": 1835911,
+  "finalized_slot": 29374576,
   "deposit_queue_gwei": "129547768351648",
   "deposit_queue_count": 130,
   "exit_queue_epoch": 1835976,
-  "exit_queue_known": true,
   "fetched_at": 1785866402588
 }
 ```
 
 `exit_queue_epoch` is the earliest epoch a newly requested exit could be
-scheduled for. `exit_queue_known` is `false` before the first validator sync
-completes, when it falls back to the earliest epoch the spec allows — treat any
-estimate derived from it as a lower bound.
+scheduled for, refreshed every epoch with the rest of the snapshot. Validators
+already exiting and pending partial withdrawals draw on the same churn, so the
+tip is whichever of the two reaches furthest — or the earliest epoch the spec
+allows, when nothing is exiting at all.
+
+`finalized_slot` is the slot of the finalized checkpoint block. It is a lower
+bound on the frontier the chain actually processes to — a skipped block at the
+epoch boundary leaves the checkpoint header a few slots short — so estimates
+built on it err pessimistic, never optimistic. Both finality fields are `null`
+if the checkpoint could not be read; the rest of the snapshot is still valid.
 
 ## Deploy with Docker
 

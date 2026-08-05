@@ -14,27 +14,36 @@ export interface QueuedDepositRecord {
   gwei_ahead: string;
   /** Number of queue entries strictly ahead of this deposit's last entry. */
   count_ahead: number;
+  /**
+   * Slot the deposit was included in */
+  slot: string;
 }
 
 export interface QueueSnapshot {
   chain_id: number;
   current_epoch: number;
   seconds_per_epoch: number;
+  slots_per_epoch: number;
   /** Balance the activation/exit churn admits per epoch, in CL gwei. */
   churn_per_epoch_gwei: string;
   max_pending_deposits_per_epoch: number;
   /** Epochs between an exit taking effect and the balance being withdrawable. */
   withdrawability_delay_epochs: number;
   max_seed_lookahead: number;
-  /** Observed distance from head to the finalized checkpoint. 2 on a healthy chain. */
-  finality_lag_epochs: number;
+  /**
+   * Finalized checkpoint epoch, or null if it could not be read. Deposits are
+   * only processed once their slot is finalized, so the distance from
+   * `current_epoch` is what stretches a deposit's wait.
+   */
+  finalized_epoch: number | null;
+  /**
+   * Slot of the finalized checkpoint block */
+  finalized_slot: number | null;
   /** Total CL gwei waiting in `pending_deposits`. */
   deposit_queue_gwei: string;
   deposit_queue_count: number;
   /** Earliest epoch a newly requested exit can be scheduled for. */
   exit_queue_epoch: number;
-  /** False when the exit queue was not observed and the floor was used instead. */
-  exit_queue_known: boolean;
   fetched_at: number;
 }
 
@@ -75,20 +84,12 @@ export interface PendingPartialWithdrawalJSON {
   withdrawable_epoch: string;
 }
 
-/** Result of a full validator sync. */
-export interface ValidatorSyncResult {
-  records: ValidatorRecord[];
-  /**
-   * Highest scheduled exit epoch seen across the registry, or null when nothing
-   * is exiting. Approximates the beacon state's `earliest_exit_epoch`.
-   */
-  exitQueueEpoch: number | null;
-}
-
 /** Raw inputs for a queue snapshot, before they are combined. */
 export interface QueueSyncData {
   headSlot: number;
   finalizedSlot: number | null;
   deposits: PendingDepositJSON[];
   partialWithdrawals: PendingPartialWithdrawalJSON[];
+  /** Highest scheduled validator exit epoch, or null when nothing is exiting. */
+  exitQueueEpoch: number | null;
 }
