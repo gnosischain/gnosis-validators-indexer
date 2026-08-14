@@ -34,8 +34,11 @@ export function registerValidatorsRoute(
       }
 
       const { withdrawal_address, limit = 100, offset = 0 } = request.body;
-      const records = indexer.query(withdrawal_address, limit, offset);
-      return reply.send(records);
+
+      return reply.send({
+        validators: indexer.query(withdrawal_address, limit, offset),
+        queued_deposits: indexer.queryQueuedDeposits(withdrawal_address, limit, offset),
+      });
     },
   );
 }

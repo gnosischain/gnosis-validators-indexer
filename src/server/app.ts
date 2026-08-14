@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { IndexerManager } from '../indexer/IndexerManager';
 import { registerValidatorsRoute } from './routes/validators';
+import { registerQueueRoute } from './routes/queue';
 import { registerHealthRoutes } from './routes/health';
 import { LOG_LEVEL } from '../config';
 
@@ -23,6 +24,7 @@ export function buildApp(indexer: IndexerManager) {
 
   registerHealthRoutes(app, indexer);
   registerValidatorsRoute(app, indexer);
+  registerQueueRoute(app, indexer);
 
   return app;
 }
