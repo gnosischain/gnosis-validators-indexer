@@ -13,7 +13,11 @@ export class IndexerManager {
 
   // Queued deposits: lowercase withdrawal_address → deposits awaiting processing.
   // Refreshed by the queue sync, which runs far more often than the full sync.
-  private queuedByAddress = new Map<string, QueuedDepositRecord[]>();
+  //
+  // null until the first queue sync lands: an empty Map here would answer "this
+  // address has nothing queued" for every address while the queue is unknown,
+  // which is a wrong answer rather than a missing one.
+  private queuedByAddress: Map<string, QueuedDepositRecord[]> | null = null;
   private snapshot: QueueSnapshot | null = null;
 
   public status: IndexerStatus = 'booting';
@@ -45,15 +49,29 @@ export class IndexerManager {
     return result;
   }
 
-  /** Deposits queued for an address that have not been processed yet. */
+  /**
+   * Deposits queued for an address that have not been processed yet, with the
+   * total held for that address so a windowed read can tell it was windowed.
+   *
+   * Paginated independently of the validator query: the two lists have unrelated
+   * lengths, so one shared window silently truncated one of them. `limit`
+   * omitted returns every entry for the address.
+   *
+   * Returns null when no queue sync has landed yet — distinct from an empty
+   * array, which asserts the address genuinely has nothing queued.
+   */
   queryQueuedDeposits(
     withdrawal_address: string,
-    limit: number,
-    offset: number,
-  ): QueuedDepositRecord[] {
-    const deposits = this.queuedByAddress.get(withdrawal_address.toLowerCase());
-    if (!deposits || deposits.length === 0) return [];
-    return deposits.slice(offset, offset + limit);
+    limit?: number,
+    offset = 0,
+  ): { deposits: QueuedDepositRecord[]; total: number } | null {
+    if (!this.queuedByAddress) return null;
+
+    const all = this.queuedByAddress.get(withdrawal_address.toLowerCase()) ?? [];
+    return {
+      deposits: limit === undefined ? all.slice(offset) : all.slice(offset, offset + limit),
+      total: all.length,
+    };
   }
 
   /** The last committed queue snapshot, or null before the first sync lands. */
@@ -135,6 +153,7 @@ export class IndexerManager {
       lastUpdatedAt: this.lastUpdatedAt,
       validatorCount: this.validatorCount,
       queueUpdatedAt: this.queueUpdatedAt,
+      queueReady: this.queuedByAddress !== null,
       depositQueueCount: this.snapshot?.deposit_queue_count ?? null,
     };
   }

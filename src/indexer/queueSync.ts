@@ -55,6 +55,8 @@ export async function runQueueSync(
     deposits,
     partialWithdrawals,
     exitQueueEpoch: validatorExitEpoch,
+    exitQueueObserved,
+    partialWithdrawalsObserved,
   } = await client.fetchQueueData('head');
 
   const slotsPerEpoch = CHAIN_CONFIG.slotsPerEpoch;
@@ -64,50 +66,46 @@ export async function runQueueSync(
 
   // ─── Deposit queue ──────────────────────────────────────────────────────────
   // One pass in queue order: the running total is what a deposit waits behind.
+  //
+  // Entries are emitted one-for-one rather than merged per pubkey. Merging lost
+  // data in both directions: a pubkey's entries can name different withdrawal
+  // addresses (consensus ignores the credentials of a top-up to a registered
+  // pubkey, so they are not even constrained to agree), and a running total
+  // taken at the last entry already counts that pubkey's own earlier entries.
   const queuedByAddress = new Map<string, QueuedDepositRecord[]>();
-  const byPubkey = new Map<string, QueuedDepositRecord>();
 
   let gweiAhead = 0n;
-  let depositQueueGwei = 0n;
+  let skippedBlsEntries = 0;
 
   for (const [index, deposit] of deposits.entries()) {
     const creds = deposit.withdrawal_credentials.toLowerCase();
 
     if (creds.startsWith('0x01') || creds.startsWith('0x02')) {
       const address = '0x' + creds.slice(-40);
-      const pubkey = deposit.pubkey.toLowerCase();
-      const existing = byPubkey.get(pubkey);
 
-      if (existing) {
-        // Several entries can target one pubkey; it is fully credited only once
-        // the last of them clears, so the later position wins.
-        existing.amount_gwei = (BigInt(existing.amount_gwei) + BigInt(deposit.amount)).toString();
-        existing.gwei_ahead = gweiAhead.toString();
-        existing.count_ahead = index;
-        existing.slot = deposit.slot;
-      } else {
-        const record: QueuedDepositRecord = {
-          pubkey,
-          withdrawal_address: address,
-          withdrawal_credentials: creds,
-          amount_gwei: deposit.amount,
-          gwei_ahead: gweiAhead.toString(),
-          count_ahead: index,
-          slot: deposit.slot,
-        };
-        byPubkey.set(pubkey, record);
+      const record: QueuedDepositRecord = {
+        pubkey: deposit.pubkey.toLowerCase(),
+        withdrawal_address: address,
+        withdrawal_credentials: creds,
+        amount_gwei: deposit.amount,
+        gwei_ahead: gweiAhead.toString(),
+        count_ahead: index,
+        slot: deposit.slot,
+      };
 
-        let list = queuedByAddress.get(address);
-        if (!list) {
-          list = [];
-          queuedByAddress.set(address, list);
-        }
-        list.push(record);
+      let list = queuedByAddress.get(address);
+      if (!list) {
+        list = [];
+        queuedByAddress.set(address, list);
       }
+      list.push(record);
+    } else {
+      // 0x00 (BLS) credentials carry no EVM address to key on, so the entry can
+      // only be counted chain-wide. Surfaced below so it is not silent.
+      skippedBlsEntries++;
     }
 
     gweiAhead += BigInt(deposit.amount);
-    depositQueueGwei += BigInt(deposit.amount);
   }
 
   // ─── Exit queue ─────────────────────────────────────────────────────────────
@@ -122,10 +120,16 @@ export async function runQueueSync(
     exitQueueEpoch = validatorExitEpoch;
   }
 
+  const pendingPartialIndices = new Set<number>();
   for (const w of partialWithdrawals) {
     const scheduled = Number(w.withdrawable_epoch) - withdrawabilityDelay;
     if (scheduled > exitQueueEpoch) exitQueueEpoch = scheduled;
+    pendingPartialIndices.add(Number(w.validator_index));
   }
+
+  // Either input failing leaves the tip at the spec floor, which is a lower
+  // bound and not the estimate the field otherwise reports.
+  const exitQueueKnown = exitQueueObserved && partialWithdrawalsObserved;
 
   const snapshot: QueueSnapshot = {
     chain_id: CHAIN_CONFIG.chainId,
@@ -138,9 +142,15 @@ export async function runQueueSync(
     max_seed_lookahead: maxSeedLookahead,
     finalized_epoch: finalizedSlot === null ? null : Math.floor(finalizedSlot / slotsPerEpoch),
     finalized_slot: finalizedSlot,
-    deposit_queue_gwei: depositQueueGwei.toString(),
+    // Every entry was added to the running total, so it ends at the queue total.
+    deposit_queue_gwei: gweiAhead.toString(),
     deposit_queue_count: deposits.length,
     exit_queue_epoch: exitQueueEpoch,
+    exit_queue_known: exitQueueKnown,
+    // null, not []: unread partials must not read as "nobody has one pending".
+    pending_partial_validator_indices: partialWithdrawalsObserved
+      ? [...pendingPartialIndices].sort((a, b) => a - b)
+      : null,
     fetched_at: Date.now(),
   };
 
@@ -150,8 +160,18 @@ export async function runQueueSync(
     {
       depositQueueCount: snapshot.deposit_queue_count,
       exitQueueEpoch: snapshot.exit_queue_epoch,
+      exitQueueKnown: snapshot.exit_queue_known,
+      pendingPartialCount: pendingPartialIndices.size,
+      skippedBlsEntries,
       durationMs: Date.now() - start,
     },
     'Queue sync complete',
   );
+
+  if (skippedBlsEntries > 0) {
+    logger.info(
+      { skippedBlsEntries },
+      'Queue entries with BLS credentials are absent from the address index',
+    );
+  }
 }

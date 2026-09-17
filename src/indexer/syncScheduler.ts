@@ -2,6 +2,7 @@ import { BeaconClient } from './BeaconClient';
 import { IndexerManager } from './IndexerManager';
 import { runFullSync } from './fullSync';
 import { runQueueSync } from './queueSync';
+import { SpecProvider } from './spec';
 import {
   FULL_SYNC_EVERY_N_EPOCHS,
   QUEUE_SYNC_EVERY_EPOCHS,
@@ -33,7 +34,7 @@ export function startSyncScheduler(
 export function startQueueSyncScheduler(
   client: BeaconClient,
   indexer: IndexerManager,
-  spec: Record<string, string>,
+  specs: SpecProvider,
 ): void {
   const intervalMs = epochsToMs(QUEUE_SYNC_EVERY_EPOCHS);
 
@@ -41,7 +42,9 @@ export function startQueueSyncScheduler(
 
   setInterval(async () => {
     try {
-      await runQueueSync(client, indexer, spec);
+      // Inside the try: the spec may still be unfetched if the beacon node was
+      // unreachable at boot, and that is a retry, not a fatal condition.
+      await runQueueSync(client, indexer, await specs.get());
     } catch (err) {
       logger.error({ err }, 'Scheduled queue sync failed — will retry next interval');
     }

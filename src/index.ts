@@ -2,7 +2,8 @@ import { CHAIN_CONFIG, PORT } from './config';
 import { BeaconClient } from './indexer/BeaconClient';
 import { IndexerManager } from './indexer/IndexerManager';
 import { runFullSync } from './indexer/fullSync';
-import { missingSpecKeys, runQueueSync } from './indexer/queueSync';
+import { runQueueSync } from './indexer/queueSync';
+import { SpecProvider } from './indexer/spec';
 import { startQueueSyncScheduler, startSyncScheduler } from './indexer/syncScheduler';
 import { buildApp } from './server/app';
 import { logger } from './utils/logger';
@@ -21,22 +22,13 @@ async function main() {
   await app.listen({ port: PORT, host: '0.0.0.0' });
   logger.info({ port: PORT }, 'HTTP server listening');
 
-  let spec: Record<string, string>;
-  try {
-    spec = await client.fetchSpec();
-  } catch (err) {
-    logger.fatal({ err }, 'Could not fetch chain spec — exiting');
-    process.exit(1);
-  }
-
-  const missing = missingSpecKeys(spec);
-  if (missing.length > 0) {
-    logger.fatal({ missing }, 'Chain spec is missing constants the queue sync needs — exiting');
-    process.exit(1);
-  }
+  // Fetched lazily and retried on schedule: only the queue sync reads the spec,
+  // so a beacon node that is briefly unreachable must not take down the registry
+  // queries, /health or /ready along with it.
+  const specs = new SpecProvider(client);
 
   try {
-    await runQueueSync(client, indexer, spec);
+    await runQueueSync(client, indexer, await specs.get());
   } catch (err) {
     logger.error({ err }, 'Initial queue sync failed — will retry on schedule');
   }
@@ -50,7 +42,7 @@ async function main() {
 
   // Schedule periodic re-syncs to catch credential changes
   startSyncScheduler(client, indexer);
-  startQueueSyncScheduler(client, indexer, spec);
+  startQueueSyncScheduler(client, indexer, specs);
 
   // Graceful shutdown
   process.on('SIGTERM', async () => {

@@ -1,6 +1,7 @@
 import {
   BeaconValidatorJSON,
   FAR_FUTURE_EPOCH,
+  PendingConsolidationJSON,
   PendingDepositJSON,
   PendingPartialWithdrawalJSON,
   QueueSyncData,
@@ -69,19 +70,40 @@ export class BeaconClient {
   }
 
   /**
-   * Tip of the exit queue: the highest scheduled exit epoch, or null when
-   * nothing is exiting. Approximates the beacon state's `earliest_exit_epoch`.
+   * Tip of the exit queue: the highest scheduled exit epoch among validators
+   * leaving through the exit churn, or null when nothing is exiting.
+   * Approximates the beacon state's `earliest_exit_epoch`.
    */
   async fetchExitQueueTip(stateId = 'head'): Promise<number | null> {
-    const validators = await this.get<BeaconValidatorJSON[]>(
-      `/eth/v1/beacon/states/${stateId}/validators` +
-        '?status=active_exiting&status=active_slashed&status=pending',
-    );
+    const [validators, consolidations] = await Promise.all([
+      // Only these two statuses can carry a scheduled exit — a validator cannot
+      // request one before activation — so asking for `pending` too would fetch
+      // the whole pending set under the queue timeout only to filter it all out.
+      this.get<BeaconValidatorJSON[]>(
+        `/eth/v1/beacon/states/${stateId}/validators` +
+          '?status=active_exiting&status=active_slashed',
+      ),
+      // A consolidation source is `active_exiting` with an exit epoch too, but
+      // that epoch came from the separate consolidation churn and says nothing
+      // about the exit queue. Losing this list only lets sources through, which
+      // can push the tip later, never earlier — so it degrades to "exclude none".
+      this.get<PendingConsolidationJSON[]>(
+        `/eth/v1/beacon/states/${stateId}/pending_consolidations`,
+      ).catch((err) => {
+        logger.warn(
+          { err },
+          'Could not read pending consolidations — exit tip may include consolidation sources',
+        );
+        return [] as PendingConsolidationJSON[];
+      }),
+    ]);
+
+    const consolidationSources = new Set(consolidations.map((c) => c.source_index));
 
     let tip: number | null = null;
     for (const v of validators) {
-      // `pending` is unfiltered, so the far-future sentinel still has to be
-      // skipped here — Number() would round it to a nonsense epoch.
+      if (consolidationSources.has(v.index)) continue;
+      // Belt and braces: Number() would round the sentinel to a nonsense epoch.
       if (v.validator.exit_epoch === FAR_FUTURE_EPOCH) continue;
       const exitEpoch = Number(v.validator.exit_epoch);
       if (tip === null || exitEpoch > tip) tip = exitEpoch;
@@ -104,7 +126,7 @@ export class BeaconClient {
    * stale, while `headers/finalized` stays correct and epoch-aligned.
    */
   async fetchQueueData(stateId = 'head'): Promise<QueueSyncData> {
-    const [head, finalized, deposits, partialWithdrawals, exitQueueEpoch] = await Promise.all([
+    const [head, finalized, deposits, partialWithdrawals, exitQueue] = await Promise.all([
       this.get<{ header: { message: { slot: string } } }>('/eth/v1/beacon/headers/head'),
       this.get<{ header: { message: { slot: string } } }>('/eth/v1/beacon/headers/finalized')
         .catch((err) => {
@@ -112,21 +134,32 @@ export class BeaconClient {
           return null;
         }),
       this.get<PendingDepositJSON[]>(`/eth/v1/beacon/states/${stateId}/pending_deposits`),
+      // null rather than [] on failure: an empty list is a real answer here, and
+      // the caller has to be able to tell the two apart.
       this.get<PendingPartialWithdrawalJSON[]>(
         `/eth/v1/beacon/states/${stateId}/pending_partial_withdrawals`,
       ).catch((err) => {
         logger.warn({ err }, 'Could not read pending partial withdrawals');
-        return [] as PendingPartialWithdrawalJSON[];
+        return null;
       }),
-      this.fetchExitQueueTip(stateId),
+      // The exit tip only refines `exit_queue_epoch`; losing it must not cost us
+      // the deposit queue, which is the payload callers actually depend on.
+      this.fetchExitQueueTip(stateId)
+        .then((tip) => ({ tip, observed: true }))
+        .catch((err) => {
+          logger.warn({ err }, 'Could not read exit queue tip — falling back to the spec floor');
+          return { tip: null, observed: false };
+        }),
     ]);
 
     return {
       headSlot: Number(head.header.message.slot),
       finalizedSlot: finalized ? Number(finalized.header.message.slot) : null,
       deposits,
-      partialWithdrawals,
-      exitQueueEpoch,
+      partialWithdrawals: partialWithdrawals ?? [],
+      exitQueueEpoch: exitQueue.tip,
+      exitQueueObserved: exitQueue.observed,
+      partialWithdrawalsObserved: partialWithdrawals !== null,
     };
   }
 

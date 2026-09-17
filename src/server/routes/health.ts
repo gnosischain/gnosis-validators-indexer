@@ -14,6 +14,11 @@ export function registerHealthRoutes(
       status: snapshot.status,
       lastUpdatedAt: snapshot.lastUpdatedAt,
       validatorCount: snapshot.validatorCount,
+      // The queue syncs on its own schedule, so a stalled queue is invisible in
+      // `status` and `lastUpdatedAt`, both of which track the full sync only.
+      queueReady: snapshot.queueReady,
+      queueUpdatedAt: snapshot.queueUpdatedAt,
+      depositQueueCount: snapshot.depositQueueCount,
     });
   });
 
