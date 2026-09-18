@@ -9,7 +9,9 @@ export async function runFullSync(
   const start = Date.now();
   logger.info('Starting full validator sync');
 
-  indexer.status = 'loading';
+  if (indexer.status !== 'ready') {
+    indexer.status = 'loading';
+  }
 
   const records = await client.fetchAllValidators('head');
 

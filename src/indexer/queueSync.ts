@@ -127,8 +127,10 @@ export async function runQueueSync(
     pendingPartialIndices.add(Number(w.validator_index));
   }
 
-  // Either input failing leaves the tip at the spec floor, which is a lower
-  // bound and not the estimate the field otherwise reports.
+  // Conservative: true only when both inputs were read. They are applied
+  // independently above, so one of them failing can still leave a real
+  // measurement here — this reports "not fully measured", which is weaker than
+  // the estimate the field otherwise carries, not "fell back to the spec floor".
   const exitQueueKnown = exitQueueObserved && partialWithdrawalsObserved;
 
   const snapshot: QueueSnapshot = {

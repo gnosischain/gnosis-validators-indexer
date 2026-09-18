@@ -27,6 +27,9 @@ export function startSyncScheduler(
       await runFullSync(client, indexer);
     } catch (err) {
       logger.error({ err }, 'Scheduled sync failed — will retry next interval');
+      // A re-sync failing leaves the previous index intact and still served;
+      // only a service that has never built one is genuinely unready.
+      if (indexer.status !== 'ready') indexer.status = 'error';
     }
   }, intervalMs);
 }

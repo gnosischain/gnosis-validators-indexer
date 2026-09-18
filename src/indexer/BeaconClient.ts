@@ -9,8 +9,17 @@ import {
 } from '../types';
 import { logger } from '../utils/logger';
 
-/** Queue endpoints are small; the validator registry is not, so it gets no timeout. */
+/** Queue endpoints are small and read every epoch, so they get a tight bound. */
 const QUEUE_TIMEOUT_MS = 20_000;
+
+/**
+ * The registry is megabytes and legitimately slow, but not unbounded: an
+ * unsignaled fetch hangs forever on a stalled body, and this one is awaited at
+ * boot before either scheduler starts — so a hang here means no sync ever runs
+ * again and the process has to be killed. Matches the 600s start_period the
+ * compose healthcheck already allows for the initial sync.
+ */
+const REGISTRY_TIMEOUT_MS = 600_000;
 
 export class BeaconClient {
   constructor(private readonly baseUrl: string) {}
@@ -39,21 +48,11 @@ export class BeaconClient {
     const path = `/eth/v1/beacon/states/${stateId}/validators?status=active&status=pending`;
     logger.info({ url: `${this.baseUrl}${path}` }, 'Fetching all validators');
 
-    // No timeout: the full registry is megabytes and can take a while.
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      headers: { Accept: 'application/json', 'Accept-Encoding': 'gzip' },
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Beacon API error ${res.status}: ${body}`);
-    }
-
-    const json = await res.json() as { data: BeaconValidatorJSON[] };
+    const validators = await this.get<BeaconValidatorJSON[]>(path, REGISTRY_TIMEOUT_MS);
 
     const records: ValidatorRecord[] = [];
 
-    for (const v of json.data) {
+    for (const v of validators) {
       const creds = v.validator.withdrawal_credentials.toLowerCase();
       // 0x01 / 0x02 credentials: last 20 bytes are the EVM address
       if (creds.startsWith('0x01') || creds.startsWith('0x02')) {

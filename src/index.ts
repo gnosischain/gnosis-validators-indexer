@@ -3,7 +3,7 @@ import { BeaconClient } from './indexer/BeaconClient';
 import { IndexerManager } from './indexer/IndexerManager';
 import { runFullSync } from './indexer/fullSync';
 import { runQueueSync } from './indexer/queueSync';
-import { SpecProvider } from './indexer/spec';
+import { SpecProvider, UnusableSpecError } from './indexer/spec';
 import { startQueueSyncScheduler, startSyncScheduler } from './indexer/syncScheduler';
 import { buildApp } from './server/app';
 import { logger } from './utils/logger';
@@ -30,6 +30,13 @@ async function main() {
   try {
     await runQueueSync(client, indexer, await specs.get());
   } catch (err) {
+    if (err instanceof UnusableSpecError) {
+      // Not a retry: no amount of re-fetching adds a constant the spec does not
+      // have, so refuse to start rather than serve a queue that cannot be right.
+      logger.fatal({ missing: err.missing }, 'Chain spec is unusable — exiting');
+      await app.close();
+      process.exit(1);
+    }
     logger.error({ err }, 'Initial queue sync failed — will retry on schedule');
   }
 

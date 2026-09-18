@@ -87,11 +87,19 @@ one sets the wait, so take the largest of the three, using constants from
 
 ```
 epochs ≈ max(
-  gwei_ahead  / churn_per_epoch_gwei,            // balance drained per epoch
-  count_ahead / max_pending_deposits_per_epoch,  // entries read per epoch
-  ceil(slot / slots_per_epoch) - finalized_epoch // finality frontier
+  ceil((gwei_ahead + amount_gwei) / churn_per_epoch_gwei), // balance per epoch
+  count_ahead / max_pending_deposits_per_epoch,            // entries per epoch
+  ceil(slot / slots_per_epoch) - finalized_epoch           // finality frontier
 )
 ```
+
+The balance term counts the entry's own `amount_gwei`, not just what sits ahead
+of it: consensus credits a deposit only once the epoch's churn budget covers
+everything before it *plus* the deposit itself (`process_pending_deposits`
+breaks on `processed_amount + amount > available_for_processing`). Leaving it
+out is optimistic in the case callers hit most — a lone deposit into an empty
+queue has `gwei_ahead = 0` and still waits `amount_gwei / churn_per_epoch_gwei`
+epochs, which at the maximum effective balance is 32 of them.
 
 Balance is usually the binding limit, but a run of small top-ups hits the count
 limit first — 16 entries per epoch drains far slower than the churn allows.
@@ -159,10 +167,15 @@ all, which can only push the tip later — pessimistic, never optimistic.
 
 It is a lower bound in every case. The churn an exit consumes depends on the
 exiting validator's own balance, which is not known until the exit is requested,
-so a large compounding validator lands later than this field reports. When
-`exit_queue_known` is `false` one of the two inputs could not be read and the
-field fell back to the spec floor, which is weaker still — the rest of the
-snapshot is unaffected.
+so a large compounding validator lands later than this field reports.
+
+`exit_queue_known` is `true` only when both inputs — validators already exiting
+and pending partial withdrawals — were read. When it is `false` one of them
+could not be read, so the tip is missing whatever that input would have
+contributed: it may still be a real measurement from the other input, or it may
+be the bare spec floor, and the response does not distinguish the two. Read it
+as "not fully measured" rather than "fell back to the spec floor". The rest of
+the snapshot is unaffected.
 
 `pending_partial_validator_indices` lists every validator with a partial
 withdrawal still waiting in the queue, sorted ascending. The consensus layer
