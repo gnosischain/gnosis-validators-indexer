@@ -1,4 +1,4 @@
-import { ValidatorRecord, IndexerStatus } from '../types';
+import { IndexerStatus, QueueSnapshot, QueuedDepositRecord, ValidatorRecord } from '../types';
 import { logger } from '../utils/logger';
 
 export class IndexerManager {
@@ -11,8 +11,18 @@ export class IndexerManager {
   private pendingByIndex: Map<number, ValidatorRecord> | null = null;
   private pendingByAddress: Map<string, Set<number>> | null = null;
 
+  // Queued deposits: lowercase withdrawal_address → deposits awaiting processing.
+  // Refreshed by the queue sync, which runs far more often than the full sync.
+  //
+  // null until the first queue sync lands: an empty Map here would answer "this
+  // address has nothing queued" for every address while the queue is unknown,
+  // which is a wrong answer rather than a missing one.
+  private queuedByAddress: Map<string, QueuedDepositRecord[]> | null = null;
+  private snapshot: QueueSnapshot | null = null;
+
   public status: IndexerStatus = 'booting';
   public lastUpdatedAt: Date | null = null;
+  public queueUpdatedAt: Date | null = null;
   public validatorCount = 0;
 
   // ─── Query ────────────────────────────────────────────────────────────────
@@ -37,6 +47,36 @@ export class IndexerManager {
     }
 
     return result;
+  }
+
+  /**
+   * Deposits queued for an address that have not been processed yet, with the
+   * total held for that address so a windowed read can tell it was windowed.
+   *
+   * Paginated independently of the validator query: the two lists have unrelated
+   * lengths, so one shared window silently truncated one of them. `limit`
+   * omitted returns every entry for the address.
+   *
+   * Returns null when no queue sync has landed yet — distinct from an empty
+   * array, which asserts the address genuinely has nothing queued.
+   */
+  queryQueuedDeposits(
+    withdrawal_address: string,
+    limit?: number,
+    offset = 0,
+  ): { deposits: QueuedDepositRecord[]; total: number } | null {
+    if (!this.queuedByAddress) return null;
+
+    const all = this.queuedByAddress.get(withdrawal_address.toLowerCase()) ?? [];
+    return {
+      deposits: limit === undefined ? all.slice(offset) : all.slice(offset, offset + limit),
+      total: all.length,
+    };
+  }
+
+  /** The last committed queue snapshot, or null before the first sync lands. */
+  queueSnapshot(): QueueSnapshot | null {
+    return this.snapshot;
   }
 
   // ─── Full sync (atomic swap) ───────────────────────────────────────────────
@@ -85,6 +125,26 @@ export class IndexerManager {
     logger.info({ validatorCount: this.validatorCount }, 'Full sync committed');
   }
 
+  // ─── Queue sync (atomic swap) ──────────────────────────────────────────────
+
+  /** Replace the queue index and snapshot in one tick. */
+  commitQueue(
+    snapshot: QueueSnapshot,
+    queuedByAddress: Map<string, QueuedDepositRecord[]>,
+  ): void {
+    this.snapshot = snapshot;
+    this.queuedByAddress = queuedByAddress;
+    this.queueUpdatedAt = new Date();
+
+    logger.debug(
+      {
+        depositQueueCount: snapshot.deposit_queue_count,
+        addressesWithQueuedDeposits: queuedByAddress.size,
+      },
+      'Queue sync committed',
+    );
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   healthSnapshot() {
@@ -92,6 +152,9 @@ export class IndexerManager {
       status: this.status,
       lastUpdatedAt: this.lastUpdatedAt,
       validatorCount: this.validatorCount,
+      queueUpdatedAt: this.queueUpdatedAt,
+      queueReady: this.queuedByAddress !== null,
+      depositQueueCount: this.snapshot?.deposit_queue_count ?? null,
     };
   }
 }

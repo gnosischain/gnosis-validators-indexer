@@ -21,6 +21,7 @@ export const PORT = parseInt(process.env.PORT ?? '3001', 10);
 export const API_KEY = requireEnv('API_KEY');
 export const LOG_LEVEL = process.env.LOG_LEVEL ?? 'info';
 export const FULL_SYNC_EVERY_N_EPOCHS = parseInt(process.env.FULL_SYNC_EVERY_N_EPOCHS ?? '4');
+export const QUEUE_SYNC_EVERY_EPOCHS = 1;
 
 const chainId = parseInt(requireEnv('CHAIN_ID'));
 const beaconUrl = requireEnv(`BEACON_URL_${chainId}`);

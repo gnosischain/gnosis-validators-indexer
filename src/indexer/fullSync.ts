@@ -9,18 +9,20 @@ export async function runFullSync(
   const start = Date.now();
   logger.info('Starting full validator sync');
 
-  indexer.status = 'loading';
+  if (indexer.status !== 'ready') {
+    indexer.status = 'loading';
+  }
 
-  const validators = await client.fetchAllValidators('head');
+  const records = await client.fetchAllValidators('head');
 
   indexer.beginPending();
-  for (const record of validators) {
+  for (const record of records) {
     indexer.addPending(record);
   }
   indexer.commitPending();
 
   logger.info(
-    { validatorCount: validators.length, durationMs: Date.now() - start },
+    { validatorCount: records.length, durationMs: Date.now() - start },
     'Full validator sync complete',
   );
 }

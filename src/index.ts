@@ -2,7 +2,9 @@ import { CHAIN_CONFIG, PORT } from './config';
 import { BeaconClient } from './indexer/BeaconClient';
 import { IndexerManager } from './indexer/IndexerManager';
 import { runFullSync } from './indexer/fullSync';
-import { startSyncScheduler } from './indexer/syncScheduler';
+import { runQueueSync } from './indexer/queueSync';
+import { SpecProvider, UnusableSpecError } from './indexer/spec';
+import { startQueueSyncScheduler, startSyncScheduler } from './indexer/syncScheduler';
 import { buildApp } from './server/app';
 import { logger } from './utils/logger';
 
@@ -20,6 +22,24 @@ async function main() {
   await app.listen({ port: PORT, host: '0.0.0.0' });
   logger.info({ port: PORT }, 'HTTP server listening');
 
+  // Fetched lazily and retried on schedule: only the queue sync reads the spec,
+  // so a beacon node that is briefly unreachable must not take down the registry
+  // queries, /health or /ready along with it.
+  const specs = new SpecProvider(client);
+
+  try {
+    await runQueueSync(client, indexer, await specs.get());
+  } catch (err) {
+    if (err instanceof UnusableSpecError) {
+      // Not a retry: no amount of re-fetching adds a constant the spec does not
+      // have, so refuse to start rather than serve a queue that cannot be right.
+      logger.fatal({ missing: err.missing }, 'Chain spec is unusable — exiting');
+      await app.close();
+      process.exit(1);
+    }
+    logger.error({ err }, 'Initial queue sync failed — will retry on schedule');
+  }
+
   try {
     await runFullSync(client, indexer);
   } catch (err) {
@@ -29,6 +49,7 @@ async function main() {
 
   // Schedule periodic re-syncs to catch credential changes
   startSyncScheduler(client, indexer);
+  startQueueSyncScheduler(client, indexer, specs);
 
   // Graceful shutdown
   process.on('SIGTERM', async () => {
